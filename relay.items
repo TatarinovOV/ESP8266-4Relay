@@ -1,0 +1,4 @@
+Switch rel1 "WiFi relay 1 [%s]" <relay> (GF_Corridor) { mqtt="<[mosquitto:home/nb/node01/dev17:state:default],>[mosquitto:home/sb/node01/dev17:command:*:default]" }
+Switch rel2 "WiFi relay 2 [%s]" <relay> (GF_Corridor) { mqtt="<[mosquitto:home/nb/node01/dev18:state:default],>[mosquitto:home/sb/node01/dev18:command:*:default]" }
+Switch rel3 "WiFi relay 3 [%s]" <relay> (GF_Corridor) { mqtt="<[mosquitto:home/nb/node01/dev19:state:default],>[mosquitto:home/sb/node01/dev19:command:*:default]" }
+Switch rel4 "WiFi relay 4 [%s]" <relay> (GF_Corridor) { mqtt="<[mosquitto:home/nb/node01/dev16:state:default],>[mosquitto:home/sb/node01/dev16:command:*:default]" }
