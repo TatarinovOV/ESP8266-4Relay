@@ -61,10 +61,10 @@
  * Listen : 
   mosquitto_sub -h mqtt.zalin.home -t home/#
  * Publish :  
-  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev16' -m OFF -u MqttUser -P WgyK1LKm
-  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev17' -m OFF -u MqttUser -P WgyK1LKm
-  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev18' -m OFF -u MqttUser -P WgyK1LKm
-  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev19' -m OFF -u MqttUser -P WgyK1LKm
+  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev16' -m ON -u MqttUser -P <password>
+  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev17' -m ON -u MqttUser -P <password>
+  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev18' -m ON -u MqttUser -P <password>
+  mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev19' -m ON -u MqttUser -P <password>
 
  */
 
@@ -82,22 +82,16 @@
 #define DEBUG                 // uncomment for debugging  
 #define ACT1 12                 // Actuator pin (LED or relay to ground)  //D6 on Wemos unnecessary
 #define MQCON 13                // MQTT link indicator D7 op Wemos unnecessary
-#define BTN 0                 // Button pin (also used for Flash setting)  D3 op Wemos  unnecessary
+#define BTN 15                 // Button pin (also used for Flash setting)  D3 op Wemos  unnecessary
 #define SERIAL_BAUD 115200
 #define HOLDOFF 1000  // blocking period between button messages
 
-#define REL1 2 //GPIO02 D4=>in1 //1   //DID16
-#define REL2 14 //gpio14(D5) =>in2  //1 //DID17
-#define REL3 12 //gpio12(D6) =>in3 //0   //DID18
-#define REL4 13 //gpio13(D7) =>in4// 3   //DID19
+#define REL1 0 //GPIO03 D3=>in1  
+#define REL2 14 //gpio14(D5) =>in2
+#define REL3 12 //gpio12(D6) =>in3
+#define REL4 13 //gpio13(D7) =>in4
 
-/*
-int const REL1 = 2; //gpio5(D3) =>in1 //1   //DID16
-int const REL2 = 14; //gpio4(D4) =>in2  //1 //DID17
-int const REL3 = 12; //gpio12(D6) =>in3 //0   //DID18
-int const REL4 = 13; //gpio13(D7) =>in4// 3   //DID19
-*/
-
+int RelayArray[5] = {REL1, REL2, REL3, REL4}; 
 
 //  STARTUP DEFAULTS
 
@@ -117,11 +111,7 @@ long  lastBtnPress = -1;            // timestamp last buttonpress
 long  lastMinute = -1;            // timestamp last minute
 long  upTime = 0;               // uptime in minutes
 int   ACT1State;                // status ACT1 output
-bool  REL1State;
-bool  REL2State;
-bool  REL3State;
-bool  REL4State;
-bool  RELStateArray[4];
+bool  RELStateArray[5];
 bool  mqttNotCon = true;            // MQTT broker not connected flag
 int   signalStrength;             // radio signal strength
 bool  wakeUp = true;              // wakeup indicator
@@ -131,10 +121,7 @@ bool  lastState = true;           // last button state
 bool  timerOnButton = false;          // timer output on button press
 bool  msgBlock = false;           // flag to hold button message
 bool  readAction;               // indicates read / set a value
-bool  send0, send1, send2, send3, send5, send6, send7, send8, send9;
-bool  send10, send11, send12, send13, send16, send17, send18, send19, send40, send41, send42, send46;
-bool  send48, send49, send50, send51, send52, send53, send54, send55, send59, send60, send61;
-bool  send99;  // message triggers
+bool sendArray[100]; // message triggers
 String  IP;                   // IPaddress of ESP
 char  buff_topic[30];             // mqtt topic
 char  buff_msg[32];             // mqtt message
@@ -156,7 +143,6 @@ PubSubClient client(mqtt_server, mqttPort, mqttSubs, espClient); // instantiate 
 const char* host = HOST;
 // function prototypes required by Arduino IDE 1.6.7
 void setupOTA(void);
-
 
 
 //===============================================================================================
@@ -192,57 +178,36 @@ void mqttSubs(char* topic, byte* payload, unsigned int length) {  // receive and
     else {
       if (DID == 0) {               // uptime
         if (readAction) {
-          send0 = true;
+          sendArray[DID] = true;
           error = 0;
         } else error = 3;           // invalid payload; do not process
       }
       if (DID == 1) {             // transmission interval
         error = 0;
         if (readAction) {
-          send1 = true;
+          sendArray[DID] = true;
         } else {                // set transmission interval
           TXinterval = strPayload.toInt();
           if (TXinterval < 10 && TXinterval != 0) TXinterval = 10; // minimum interval is 10 seconds
         }
       }
-      if (DID == 2) {               // RSSI
+      if (DID == 2 || DID == 3){               // RSSI // version
         if (readAction) {
-          send2 = true;
+          sendArray[DID] = true;
           error = 0;
         } else error = 3;           // invalid payload; do not process
       }
-      if (DID == 3) {             // version
+      if (DID == 5 || DID == 6) {             // ACK // toggle / timer mode selection
         if (readAction) {
-          send3 = true;
+          sendArray[DID] = true;
           error = 0;
-        } else error = 3;           // invalid payload; do not process
-      }
-      if (DID == 5) {             // ACK
-        if (readAction) {
-          send5 = true;
-          error = 0;
-        } else if (strPayload == "ON") {
+        } else if (strPayload == "ON") {      // select toggle mode
           setAck = true;
-          if (setAck) send5 = true;
-          error = 0;
-        } else if (strPayload == "OFF") {
-          setAck = false;
-          if (setAck) send5 = true;
-          error = 0;
-        } else error = 3;
-      }
-
-      if (DID == 6) {             // toggle / timer mode selection
-        if (readAction) {
-          send6 = true;
-          error = 0;
-        } else if (strPayload == "ON") {    // select toggle mode
-          toggleOnButton = true;
-          if (setAck) send6 = true;
+          if (setAck) sendArray[DID] = true;
           error = 0;
         } else if (strPayload == "OFF") {   // select timer mode
-          toggleOnButton = false;
-          if (setAck) send6 = true;
+          setAck = false;
+          if (setAck) sendArray[DID] = true;
           error = 0;
         } else error = 3;
       }
@@ -250,7 +215,7 @@ void mqttSubs(char* topic, byte* payload, unsigned int length) {  // receive and
       if (DID == 7) {             // Timer interval
         error = 0;
         if (readAction) {
-          send7 = true;
+          sendArray[DID] = true;
         } else {                // set timer interval
           TIMinterval = strPayload.toInt();
           if (TIMinterval < 5 && TIMinterval != 0) TIMinterval = 5; // minimum interval is 5 seconds
@@ -260,7 +225,7 @@ void mqttSubs(char* topic, byte* payload, unsigned int length) {  // receive and
       if (DID == 8) {             // Timer interval
         error = 0;
         if (readAction) {
-          send8 = true;
+          sendArray[DID] = true;
         } else {                // set timer interval
           //TIMShower = strPayload.toInt();
           //if (TIMShower <3&& TIMShower !=0) TIMShower = 3; // minimum interval is 3 min
@@ -271,7 +236,7 @@ void mqttSubs(char* topic, byte* payload, unsigned int length) {  // receive and
       if (DID == 9) {             // Timer interval
         error = 0;
         if (readAction) {
-          send9 = true;
+          sendArray[DID] = true;
         } else {                // set timer interval
           // TIMShower2 = strPayload.toInt();
           // Serial.print(TIMShower2);
@@ -279,180 +244,59 @@ void mqttSubs(char* topic, byte* payload, unsigned int length) {  // receive and
       }
       //---------------------------------------
       //ip
-      if (DID == 10) {               // IP
+      if (DID >= 10 && DID <=12) {               // IP //SSID        //PW
         if (readAction) {
-          send10 = true;
+          sendArray[DID] = true;
           error = 0;
         } else error = 3;           // invalid payload; do not process
       }
 
-      //------------------------------------------
-
-      if (DID == 11) {   //SSID
-        if (readAction) {
-          send11 = true;
-          error = 0;
-        } else error = 3;
-      }
-//--------------------------------------
-      if (DID == 12) {   //PW
-        if (readAction) {
-          send12 = true;
-          error = 0;
-        } else error = 3;
-      }
       //--------------------
        if (DID == 13) {             // Timer interval
         error = 0;
         if (readAction) {
-          send13 = true;
+          sendArray[13] = true;
         } else {                // set timer interval
           // moistTimer = strPayload.toInt();
           // Serial.print(moistTimer);
         }
       }
       //-------------------
-
-      if (DID == 16) {              // state of Relay1 GPIO1 TX
+      // Relay 1 to 4
+      if (DID >= 16 && DID <= 19) {              // state of Relay1 GPIO1 TX
         if (readAction) {
           //Serial.end();
-          send16 = true;
+          sendArray[DID] = true;
           error = 0;
         } else if (strPayload == "ON") {
-          REL1State = 0; //mind you,the relay used will switch on at LOW
-          digitalWrite(REL1, REL1State);
-          if (setAck) send16 = true;
+          RELStateArray[DID-15] = 0; //mind you,the relay used will switch on at LOW
+          digitalWrite(RelayArray[DID-15], RELStateArray[DID-15]);
+          if (setAck) sendArray[DID] = true;
           error = 0;
         } else if (strPayload == "OFF") {
-          REL1State = 1;
-          digitalWrite(REL1, REL1State);
-          if (setAck) send16 = true;
+          RELStateArray[DID-15] = 1;
+          digitalWrite(RelayArray[DID-15], RELStateArray[DID-15]);
+          if (setAck) sendArray[DID] = true;
           error = 0;
         } else error = 3;
       }
       //-----------------------------
 
-    if (DID == 17) {              // state of Relay2
-        if (readAction) {
-          send17 = true;
-          error = 0;
-        } else if (strPayload == "ON") {
-          REL2State = 0;
-          digitalWrite(REL2, REL2State);
-          if (setAck) send17 = true;
-          error = 0;
-        } else if (strPayload == "OFF") {
-          REL2State = 1;
-          digitalWrite(REL2, REL2State);
-          if (setAck) send17 = true;
-          error = 0;
-        } else error = 3;
-      }
-      //-----------------------------
-      if (DID == 18) {              // state of Relay3
-        if (readAction) {
-          send18 = true;
-          error = 0;
-        } else if (strPayload == "ON") {
-          REL3State = 0;
-          digitalWrite(REL3, REL3State);
-          if (setAck) send18 = true;
-          error = 0;
-        } else if (strPayload == "OFF") {
-          REL3State = 1;
-          digitalWrite(REL3, REL3State);
-          if (setAck) send18 = true;
-          error = 0;
-        } else error = 3;
-      }
-    
-      //---------------------------
-      if (DID == 19) {              // state of Relay4  GPIO3 Rx
-       // Serial.end();
-        if (readAction) {
-          send19 = true;
-          error = 0;
-        } else if (strPayload == "ON") {
-          REL4State = 0;
-          digitalWrite(REL4, REL4State);
-          if (setAck) send19 = true;
-          error = 0;
-        } else if (strPayload == "OFF") {
-          REL4State = 1;
-          digitalWrite(REL4, REL4State);
-          if (setAck) send19 = true;
-          error = 0;
-        } else error = 3;
-      }
-      //-----------------------------
-      //--------------------------
       if (DID == 46) { //coop door
         if (readAction) {
-          send46 = true;
+          sendArray[46] = true;
           error = 0;
         } else error = 3;
       }
-      //----------------------
 
       //-----------------------------------------
-      if (DID == 49) {   //batterij
+      if (DID == 49 || DID == 51 || DID == 52 || DID == 53 || DID == 55 || DID == 59 || DID == 60) {   //49 batterij //51 DHT11 //52 BH1750 //53 pcf8591 // 55 ds18b20
         if (readAction) {
-          send49 = true;
+          sendArray[DID] = true;
           error = 0;
         } else error = 3;
       }
-      //-----------
-      if (DID == 50) {   //DHT11
-        if (readAction) {
-          send50 = true;
-          error = 0;
-        } else error = 3;
-      }
-      //------------------
-      if (DID == 51) {   //BMP
-        if (readAction) {
-          send51 = true;
-          error = 0;
-        } else error = 3;
-      }
-      //--------------
-      if (DID == 52)  { //BH1750
-        if (readAction) {
-          send52 = true;
-          error = 0;
-        } else error = 3;
-      }
-      //----
-      if (DID == 53) { ///pcf8591
-        //DHT11
-        if (readAction) {
-          send53 = true;
-          error = 0;
-        } else error = 3;
-      }
-      //----------------------
-      if (DID == 55) { //ds18b20
-        //DHT11
-        if (readAction) {
-          send55 = true;
-          error = 0;
-        } else error = 3;
-      }
-      //---------------------------
-      if (DID == 59) {
-        if (readAction) {
-          send59 = true;
-          error = 0;
-        } else error = 0;
-      }
-      //--------------
-      if (DID == 60) {
-        if (readAction) {
-          send60 = true;
-          error = 0;
-        } else error = 0;
-      }
-      //---------
+
     }
   } else error = 1;
   if (error != 0) {             // send error message
@@ -486,7 +330,6 @@ void connectMqtt() {                // reconnect to mqtt broker
     digitalWrite(MQCON, mqttNotCon);      // adjust MQTT link indicator
   }
 }
-
 
 void connectWifi() {                // reconnect to Wifi
   while (WiFi.status() != WL_CONNECTED ) {
@@ -527,7 +370,6 @@ void connectWifi() {                // reconnect to Wifi
     if (!MDNS.begin(host)) {             // Start the mDNS responder for esp8266.local
     Serial.println("Error setting up MDNS responder!");
   }
-
   
 #ifdef DEBUG
   Serial.println("\nWiFi connected");
@@ -537,177 +379,167 @@ void connectWifi() {                // reconnect to Wifi
 #endif
 }
 
-
 void sendMsg() {                // send any outstanding messages
   int i;
   if (wakeUp) {                 // send wakeup message
     wakeUp = false;
     sprintf(buff_topic, "home/nb/node%02d/dev99", nodeId);
     sprintf(buff_msg, "NODE %d WAKEUP: %s",  nodeId, clientName);
-    send99 = false;
+    sendArray[99] = false;
     pubMQTT(buff_topic, buff_msg);
   }
 
-  if (send0) {                  // send uptime
+  if (sendArray[0]) {                  // send uptime
     sprintf(buff_topic, "home/nb/node%02d/dev00", nodeId);
     sprintf(buff_msg, "%d", upTime);
-    send0 = false;
+    sendArray[0] = false;
     pubMQTT(buff_topic, buff_msg);
   }
 
-  if (send1) {                  // send transmission interval
+  if (sendArray[1]) {                  // send transmission interval
     sprintf(buff_topic, "home/nb/node%02d/dev01", nodeId);
     sprintf(buff_msg, "%d", TXinterval);
-    send1 = false;
+    sendArray[1] = false;
     pubMQTT(buff_topic, buff_msg);
   }
 
-  if (send2) {                  // send transmission interval
+  if (sendArray[2]) {                  // send transmission interval
     sprintf(buff_topic, "home/nb/node%02d/dev02", nodeId);
     signalStrength = WiFi.RSSI();
     sprintf(buff_msg, "%d", signalStrength);
-    send2 = false;
+    sendArray[2] = false;
     pubMQTT(buff_topic, buff_msg);
   }
 
-  if (send3) {                  // send software version
+  if (sendArray[3]) {                  // send software version
     sprintf(buff_topic, "home/nb/node%02d/dev03", nodeId);
     for (i = 0; i < sizeof(VERSION); i++) {
       buff_msg[i] = VERSION[i];
     }
     buff_msg[i] = '\0';
-    send3 = false;
+    sendArray[3] = false;
     pubMQTT(buff_topic, buff_msg);
   }
 
-  if (send5) {                  // send ACK state
+  if (sendArray[5]) {                  // send ACK state
     sprintf(buff_topic, "home/nb/node%02d/dev05", nodeId);
     if (!setAck) sprintf(buff_msg, "OFF");
     else sprintf(buff_msg, "ON");
     pubMQTT(buff_topic, buff_msg);
-    send5 = false;
+    sendArray[5] = false;
   }
 
-  if (send6) {                  // send toggleOnButton state
+  if (sendArray[6]) {                  // send toggleOnButton state
     sprintf(buff_topic, "home/nb/node%02d/dev06", nodeId);
     if (!toggleOnButton) sprintf(buff_msg, "OFF");
     else sprintf(buff_msg, "ON");
     pubMQTT(buff_topic, buff_msg);
-    send6 = false;
+    sendArray[6] = false;
   }
 
-  if (send7) {                  // send timer value
+  if (sendArray[7]) {                  // send timer value
     sprintf(buff_topic, "home/nb/node%02d/dev07", nodeId);
     // sprintf(buff_msg, "%d", TIMinterval);
     pubMQTT(buff_topic, buff_msg);
-    send7 = false;
+    sendArray[7] = false;
   }
 
-
-  if (send8) {                  // send timer value
+  if (sendArray[8]) {                  // send timer value
     sprintf(buff_topic, "home/nb/node%02d/dev08", nodeId);
     //sprintf(buff_msg, "%d", TIMShower);
     pubMQTT(buff_topic, buff_msg);
-    send8 = false;
+    sendArray[8] = false;
     //pubMQTT(buff_topic, buff_msg);
   }
 
-
-  if (send9) {                  // send timer value
+  if (sendArray[9]) {                  // send timer value
     sprintf(buff_topic, "home/nb/node%02d/dev09", nodeId);
     //sprintf(buff_msg, "%d", TIMShower2);
     pubMQTT(buff_topic, buff_msg);
-    send9 = false;
+    sendArray[9] = false;
     //pubMQTT(buff_topic, buff_msg);
   }
 
-
-
-  if (send10) {               // send IP address
+  if (sendArray[10]) {               // send IP address
     sprintf(buff_topic, "home/nb/node%02d/dev10", nodeId);
     for (i = 0; i < 16; i++) {
       buff_msg[i] = IP[i];
     }
     buff_msg[i] = '\0';
     pubMQTT(buff_topic, buff_msg);
-    send10 = false;
+    sendArray[10] = false;
   }
 
-
-  if (send11) {   //send SSID
+  if (sendArray[11]) {   //send SSID
     sprintf(buff_topic, "home/nb/node%02d/dev11", nodeId);
     for (i = 0; i < 20; i++) {
       buff_msg[i] = wifi_ssid[i];
     }
     buff_msg[i] = '\0';
     pubMQTT(buff_topic, buff_msg);
-    send11 = false;
+    sendArray[11] = false;
   }
 
-
-  if (send12) {   //send PW
+  if (sendArray[12]) {   //send PW
     sprintf(buff_topic, "home/nb/node%02d/dev12", nodeId);
     for (i = 0; i < 20; i++) {
       buff_msg[i] = wifi_password[i];
     }
     buff_msg[i] = '\0';
     pubMQTT(buff_topic, buff_msg);
-    send12 = false;
+    sendArray[12] = false;
   }
 
-
-  if (send13) {                  // send timer value
+  if (sendArray[13]) {                  // send timer value
     sprintf(buff_topic, "home/nb/node%02d/dev13", nodeId);
     // sprintf(buff_msg, "%d", moistTimer);
     pubMQTT(buff_topic, buff_msg);
-    send13 = false;
+    sendArray[13] = false;
     //pubMQTT(buff_topic, buff_msg);
   }
 
- 
-
-  if (send16) {                 // send actuator state
+  if (sendArray[16]) {                 // send actuator state
     sprintf(buff_topic, "home/nb/node%02d/dev16", nodeId);
-    if (REL1State == 0) sprintf(buff_msg, "ON");
-    if (REL1State == 1) sprintf(buff_msg, "OFF");
+    if (RELStateArray[1] == 0) sprintf(buff_msg, "ON");
+    if (RELStateArray[1] == 1) sprintf(buff_msg, "OFF");
     pubMQTT(buff_topic, buff_msg);
-    send16 = false;
+    sendArray[16] = false;
   }
 
-    if (send17) {                 // send actuator state
+    if (sendArray[17]) {                 // send actuator state
     sprintf(buff_topic, "home/nb/node%02d/dev17", nodeId);
-    if (REL2State == 0) sprintf(buff_msg, "ON");
-    if (REL2State == 1) sprintf(buff_msg, "OFF");
+    if (RELStateArray[2] == 0) sprintf(buff_msg, "ON");
+    if (RELStateArray[2] == 1) sprintf(buff_msg, "OFF");
     pubMQTT(buff_topic, buff_msg);
-    send17 = false;
+    sendArray[17] = false;
   }
 
-    if (send18) {                 // send actuator state
+    if (sendArray[18]) {                 // send actuator state
     sprintf(buff_topic, "home/nb/node%02d/dev18", nodeId);
-    if (REL3State == 0) sprintf(buff_msg, "ON");
-    if (REL3State == 1) sprintf(buff_msg, "OFF");
+    if (RELStateArray[3] == 0) sprintf(buff_msg, "ON");
+    if (RELStateArray[3] == 1) sprintf(buff_msg, "OFF");
     pubMQTT(buff_topic, buff_msg);
-    send18 = false;
+    sendArray[18] = false;
   }
 
-    if (send19) {                 // send actuator state
+    if (sendArray[19]) {                 // send actuator state
     sprintf(buff_topic, "home/nb/node%02d/dev19", nodeId);
-    if (REL4State == 0) sprintf(buff_msg, "ON");
-    if (REL4State == 1) sprintf(buff_msg, "OFF");
+    if (RELStateArray[4] == 0) sprintf(buff_msg, "ON");
+    if (RELStateArray[4] == 1) sprintf(buff_msg, "OFF");
     pubMQTT(buff_topic, buff_msg);
-    send19 = false;
+    sendArray[19] = false;
   }
 
-  if (send40) {                 // send button pressed message
+  if (sendArray[40]) {                 // send button pressed message
     sprintf(buff_topic, "home/nb/node%02d/dev40", nodeId);
     if (ACT1State == 0) sprintf(buff_msg, "OFF");
     if (ACT1State == 1) sprintf(buff_msg, "ON");
     pubMQTT(buff_topic, buff_msg);
-    send40 = false;
+    sendArray[40] = false;
   }
  
   //-----------------
-  if (send48) {
+  if (sendArray[48]) {
     sprintf(buff_topic, "home/nb/node%02d/dev48", nodeId);
     //dtostrf(raw, 10, 2, buff_msg);
     while (buff_msg[0] == 32) {        // remove any leading spaces
@@ -716,11 +548,11 @@ void sendMsg() {                // send any outstanding messages
       }
     }
     pubMQTT(buff_topic, buff_msg);
-    send48 = false;
+    sendArray[48] = false;
   }
   //---------------
 #ifdef USE_LIPO
-  if (send49)  //batteryvoltage
+  if (sendArray[49])  //batteryvoltage
   {
     sprintf(buff_topic, "home/nb/node%02d/dev49", nodeId);
     batterij();
@@ -734,7 +566,7 @@ void sendMsg() {                // send any outstanding messages
 
     // pubMQTT(buff_topic, buff_msg);
     pubMQTT(buff_topic, data);
-    send49 = false;
+    sendArray[49] = false;
 
   }
 #endif
@@ -755,51 +587,49 @@ void setup() {
                
   //pinMode(1,FUNCTION_3);
   //pinMode(3,FUNCTION_3);  
-  pinMode(REL1,OUTPUT);
-  pinMode(REL2,OUTPUT);
-  pinMode(REL3,OUTPUT);
-  pinMode(REL4,OUTPUT);
 
+  //---------
+  for (byte i=1 ; i<5 ; i++) {
+    pinMode(RelayArray[i],OUTPUT);
+    RELStateArray[i] = HIGH;
+    digitalWrite(RelayArray[i],RELStateArray[i]);
+      
+  }
   delay(500);
   // Init Serial
 #ifdef DEBUG
     Serial.begin(SERIAL_BAUD);
     //checkChip();
 #endif
-  //---------
+
   setAck=true;
-  REL1State = REL2State = REL3State = REL4State = HIGH ; 
-  digitalWrite(REL1,REL1State);
-  digitalWrite(REL2,REL2State);
-  digitalWrite(REL3,REL3State);
-  digitalWrite(REL4,REL4State);
 
 
-  send0 = false;//uptime
-  send1 = true; // interval for push messages
-  send3 = true;// Version
-  send5 = true;// ACK
-  send7 = false;//timerinterval (sec)
-  send8 = false;//timer1 (min)
-  send9 = false; //timer2 (minm)
-  send10 = true;// send IP on startup
-  send11 = true; //SSID
-  send13 = true; // timer for moisture
-  send16 = true; //read/set actuator output
-  send17 = true; //Relay
-  send18 = true;
-  send19 = true;
-  send40 = false;
-  send46 = false; 
-  send48 - false; 
-  send49 = false; 
-  send50 = false; 
-  send51 = true; 
-  send52 = false; 
-  send53 = true; 
-  send54 = false; 
-  send59 = true;
-  send60 = true;
+  sendArray[0] = false;//uptime
+  sendArray[1] = true; // interval for push messages
+  sendArray[3] = true;// Version
+  sendArray[5] = true;// ACK
+  sendArray[7] = false;//timerinterval (sec)
+  sendArray[8] = false;//timer1 (min)
+  sendArray[9] = false; //timer2 (minm)
+  sendArray[10] = true;// send IP on startup
+  sendArray[11] = true; //SSID
+  sendArray[13] = true; // timer for moisture
+  sendArray[16] = true; //read/set actuator output
+  sendArray[17] = true; //Relay
+  sendArray[18] = true;
+  sendArray[19] = true;
+  sendArray[40] = false;
+  sendArray[46] = false; 
+  sendArray[48] - false; 
+  sendArray[49] = false; 
+  sendArray[50] = false; 
+  sendArray[51] = true; 
+  sendArray[52] = false; 
+  sendArray[53] = true; 
+  sendArray[54] = false; 
+  sendArray[59] = true;
+  sendArray[60] = true;
   setupOTA();
   IP = WiFi.localIP().toString();
 }
@@ -826,17 +656,17 @@ void loop() {                       // Main program loop
   if (!msgBlock &&  (curState != lastState)) {        // input changed ?
     delay(5);
     lastBtnPress = millis();                // take timestamp
-    if (setAck) send40 = true;                // send button message
+    if (setAck) sendArray[40] = true;                // send button message
     if (curState == LOW) {
       if (toggleOnButton) {                 // button in toggle state ?
         ACT1State = !ACT1State;               // toggle output
         digitalWrite(ACT1, ACT1State);
-        send16 = true;                    // send message on status change
+        sendArray[16] = true;                    // send message on status change
       } else if (TIMinterval > 0 && !timerOnButton) {       // button in timer state ?
         timerOnButton = true;               // start timer interval
         ACT1State = HIGH;                 // switch on ACT1
         digitalWrite(ACT1, ACT1State);
-        send16 = true;
+        sendArray[16] = true;
       }
     }
     lastState = curState;
@@ -849,7 +679,7 @@ void loop() {                       // Main program loop
       timerOnButton = false;                // then end timer interval
       ACT1State = LOW;                  // and switch off Actuator
       digitalWrite(ACT1, ACT1State);
-      send16 = true;
+      sendArray[16] = true;
     }
   }
 
@@ -874,30 +704,30 @@ void loop() {                       // Main program loop
       // remove comment to include parameter in transmission
 
 
-      send0 = true;                     // uptime
-      send1 = true; //  interval
-      send2 = false;                   // send RSSI
-      send3 = false;                   // send version
-      send8 = false;                  
-      send9 = false;                 
-      send10 = true;                // send IP address
-      send11 = false;
-      send13 = false; // 
-      send16 = true;                    // output state relay
-      send17 = true; //Relay2
-      send18 = true; // Relay3
-      send19 = true; // Relay4
-      send41 = false; //
-      send42 = false; //
-      send46 = false; //
-      send48 = false; //
-      send49 = false; //
-      send51 = false; //
-      send53 = false; //
-      send55 = false; //
-      send59 = false; //
-      send60 = false; // 
-      send61 = false; //
+      sendArray[0] = true;                     // uptime
+      sendArray[1] = true; //  interval
+      sendArray[2] = false;                   // send RSSI
+      sendArray[3] = false;                   // send version
+      sendArray[8] = false;                  
+      sendArray[9] = false;                 
+      sendArray[10] = true;                // send IP address
+      sendArray[11] = false;
+      sendArray[13] = false; // 
+      sendArray[16] = true;                    // output state relay
+      sendArray[17] = true; //Relay2
+      sendArray[18] = true; // Relay3
+      sendArray[19] = true; // Relay4
+      sendArray[41] = false; //
+      sendArray[42] = false; //
+      sendArray[46] = false; //
+      sendArray[48] = false; //
+      sendArray[49] = false; //
+      sendArray[51] = false; //
+      sendArray[53] = false; //
+      sendArray[55] = false; //
+      sendArray[59] = false; //
+      sendArray[60] = false; // 
+      sendArray[61] = false; //
     }
   }
 
