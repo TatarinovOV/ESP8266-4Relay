@@ -19,27 +19,27 @@
 //  73 - 90   Special devices not implemented yet)
 // **********************************************************
 //  Defined devices are:
-//  00 uptime:   read uptime in minutes
-//  01 interval: read/set transmission interval for push messages
-//  02 RSSI:   read radio signal strength
-//  03 version:  read software version
-//  05 ACK:    read/set acknowledge message after a 'set' request
-//  06 toggle:   read/set select toggle / timer function
-//  07 timer:    read/set timer interval in seconds
-//  08
-//  09
-//  10  IP:     Read IP address
-//  11  SSID: Read SSID
-//  12  PW: Read Password
-//  13 
-//  16  read/set relay1 output
-//  17  read set relay2 output
-//  18  read set relay3 output
-//  19  read set relay4 output
-//  40  button    tx only: button pressed
-//  92  error:    tx only: device not supported
-//  91  error:    tx only: syntax error
-//  99  wakeup:   tx only: first message sent on node startup
+//  dev00 uptime:   read uptime in minutes
+//  dev01 interval: read/set transmission interval for push messages
+//  dev02 RSSI:   read radio signal strength
+//  dev03 version:  read software version
+//  dev05 ACK:    read/set acknowledge message after a 'set' request
+//  dev06 toggle:   read/set select toggle / timer function
+//  dev07 timer:    read/set timer interval in seconds
+//  dev08
+//  dev09
+//  dev10  IP:     Read IP address
+//  dev11  SSID: Read SSID
+//  dev12  PW: Read Password
+//  dev13 
+//  dev16  read/set relay1 output
+//  dev17  read set relay2 output
+//  dev18  read set relay3 output
+//  dev19  read set relay4 output
+//  dev40  button    tx only: button pressed
+//  dev92  error:    tx only: device not supported
+//  dev91  error:    tx only: syntax error
+//  dev99  wakeup:   tx only: first message sent on node startup
 //
 //  Hardware connections as in Sonoff device:
 //  - pin 0 is connected to a button that switches to GND, pullup to VCC, also used to enter memory flash mode.
@@ -67,40 +67,44 @@
   mosquitto_pub -h mqtt.zalin.home -t 'home/sb/node01/dev19' -m ON -u MqttUser -P <password>
 
  */
-
 /*
-   GPIO0  -->IN3  DID18
-   GPIO1  (Tx)  -->IN1  DID16
-   GPIO2  --> IN2  DID17
-   GPIO3  (Rx) -->IN4  DID 19
-*/
+ * Par defaut le port son tous ouverts.
+ * 
+ */
 
 #include "userdata.h"
 #include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>        // Include the mDNS library //LJU
+#include <ESP8266mDNS.h>        // Include the mDNS library
 #include "PubSubClient.h"
 #define DEBUG                 // uncomment for debugging  
 #define ACT1 12                 // Actuator pin (LED or relay to ground)  //D6 on Wemos unnecessary
 #define MQCON 13                // MQTT link indicator D7 op Wemos unnecessary
-#define BTN 15                 // Button pin (also used for Flash setting)  D3 op Wemos  unnecessary
+//#define BTN 15                 // Button pin (also used for Flash setting)  D3 op Wemos  unnecessary
 #define SERIAL_BAUD 115200
 #define HOLDOFF 1000  // blocking period between button messages
+#define RELTemporisation  10000 // 1 minutes = 60000ms entre 2 action sur une valve
 
-#define REL1 0 //GPIO03 D3=>in1  
-#define REL2 14 //gpio14(D5) =>in2
-#define REL3 12 //gpio12(D6) =>in3
-#define REL4 13 //gpio13(D7) =>in4
+/*
+   GPIo05  D1-->IN1  DID16  ok
+   GPIo04  D2-->IN2  DID17  ok
+   GPIo14  D5-->IN3  DID18  
+   GPIo12  D6-->IN4  DID19  ok
+   GPIo13  D7-->BTN  DID40  
+*/
 
-int RelayArray[5] = {REL1, REL2, REL3, REL4}; 
+#define BTN 13
+#define REL1 5
+#define REL2 4
+#define REL3 14
+#define REL4 12
 
 //  STARTUP DEFAULTS
 
 long  TXinterval = 60;            // periodic transmission interval in seconds
-long  TIMinterval = 60;           // timer interval in seconds
-bool  ackButton = false;            // flag for message on button press
+long  TIMinterval = 120;           // timer interval in seconds
+int  ackButton ;            // flag for message on button press
 bool  toggleOnButton = true;          // toggle output on button press
 bool  fallBackSsi = false;          // toggle access point
-
 
 //  VARIABLES
 
@@ -117,7 +121,7 @@ int   signalStrength;             // radio signal strength
 bool  wakeUp = true;              // wakeup indicator
 bool  setAck = true;             // acknowledge receipt of actions
 bool  curState = true;            // current button state
-bool  lastState = true;           // last button state
+bool  lastState = curState;           // last button state
 bool  timerOnButton = false;          // timer output on button press
 bool  msgBlock = false;           // flag to hold button message
 bool  readAction;               // indicates read / set a value
@@ -129,11 +133,22 @@ char  clientName[10];             // Mqtt client name
 char  wifi_ssid[20];                // Wifi SSID name
 char  wifi_password[20];              // Wifi password
 
-void mqttSubs(char* topic, byte* payload, unsigned int length);
+//===============================================================================================
 
+// Relay Configuration
+#include "Relay.h"
+
+Relay relayStruct[5] = {
+  Relay(0,RELTemporisation),
+  Relay(REL1,RELTemporisation),
+  Relay(REL2,RELTemporisation),
+  Relay(REL3,RELTemporisation),
+  Relay(REL4,RELTemporisation)
+};
+
+// wifi configuration
+//
 WiFiClient espClient;
-PubSubClient client(mqtt_server, mqttPort, mqttSubs, espClient); // instantiate MQTT client
-
 
 // OTA configuration
 //
@@ -144,6 +159,15 @@ const char* host = HOST;
 // function prototypes required by Arduino IDE 1.6.7
 void setupOTA(void);
 
+// MQTT defintion
+//
+void mqttSubs(char* topic, byte* payload, unsigned int length);
+PubSubClient client(mqtt_server, mqttPort, mqttSubs, espClient); // instantiate MQTT client
+
+// Button Management
+//
+#include <Bounce2.h>
+Bounce debouncer = Bounce(); // Instantiate a Bounce object
 
 //===============================================================================================
 
@@ -218,7 +242,7 @@ void mqttSubs(char* topic, byte* payload, unsigned int length) {  // receive and
           sendArray[DID] = true;
         } else {                // set timer interval
           TIMinterval = strPayload.toInt();
-          if (TIMinterval < 5 && TIMinterval != 0) TIMinterval = 5; // minimum interval is 5 seconds
+          if (TIMinterval < 60 && TIMinterval != 0) TIMinterval = 60; // minimum interval is 60 seconds
         }
       }
       //------------------------------------------
@@ -269,13 +293,11 @@ void mqttSubs(char* topic, byte* payload, unsigned int length) {  // receive and
           sendArray[DID] = true;
           error = 0;
         } else if (strPayload == "ON") {
-          RELStateArray[DID-15] = 0; //mind you,the relay used will switch on at LOW
-          digitalWrite(RelayArray[DID-15], RELStateArray[DID-15]);
+          relayStruct[DID-15].close();
           if (setAck) sendArray[DID] = true;
           error = 0;
         } else if (strPayload == "OFF") {
-          RELStateArray[DID-15] = 1;
-          digitalWrite(RelayArray[DID-15], RELStateArray[DID-15]);
+          relayStruct[DID-15].open();
           if (setAck) sendArray[DID] = true;
           error = 0;
         } else error = 3;
@@ -368,8 +390,12 @@ void connectWifi() {                // reconnect to Wifi
   delay(1000);
 
     if (!MDNS.begin(host)) {             // Start the mDNS responder for esp8266.local
+#ifdef DEBUG
     Serial.println("Error setting up MDNS responder!");
+#endif
+
   }
+  IP = WiFi.localIP().toString();
   
 #ifdef DEBUG
   Serial.println("\nWiFi connected");
@@ -472,10 +498,7 @@ void sendMsg() {                // send any outstanding messages
 
   if (sendArray[11]) {   //send SSID
     sprintf(buff_topic, "home/nb/node%02d/dev11", nodeId);
-    for (i = 0; i < 20; i++) {
-      buff_msg[i] = wifi_ssid[i];
-    }
-    buff_msg[i] = '\0';
+    strcpy(buff_msg,wifi_ssid);
     pubMQTT(buff_topic, buff_msg);
     sendArray[11] = false;
   }
@@ -497,43 +520,27 @@ void sendMsg() {                // send any outstanding messages
     sendArray[13] = false;
     //pubMQTT(buff_topic, buff_msg);
   }
-
-  if (sendArray[16]) {                 // send actuator state
-    sprintf(buff_topic, "home/nb/node%02d/dev16", nodeId);
-    if (RELStateArray[1] == 0) sprintf(buff_msg, "ON");
-    if (RELStateArray[1] == 1) sprintf(buff_msg, "OFF");
-    pubMQTT(buff_topic, buff_msg);
-    sendArray[16] = false;
-  }
-
-    if (sendArray[17]) {                 // send actuator state
-    sprintf(buff_topic, "home/nb/node%02d/dev17", nodeId);
-    if (RELStateArray[2] == 0) sprintf(buff_msg, "ON");
-    if (RELStateArray[2] == 1) sprintf(buff_msg, "OFF");
-    pubMQTT(buff_topic, buff_msg);
-    sendArray[17] = false;
-  }
-
-    if (sendArray[18]) {                 // send actuator state
-    sprintf(buff_topic, "home/nb/node%02d/dev18", nodeId);
-    if (RELStateArray[3] == 0) sprintf(buff_msg, "ON");
-    if (RELStateArray[3] == 1) sprintf(buff_msg, "OFF");
-    pubMQTT(buff_topic, buff_msg);
-    sendArray[18] = false;
-  }
-
-    if (sendArray[19]) {                 // send actuator state
-    sprintf(buff_topic, "home/nb/node%02d/dev19", nodeId);
-    if (RELStateArray[4] == 0) sprintf(buff_msg, "ON");
-    if (RELStateArray[4] == 1) sprintf(buff_msg, "OFF");
-    pubMQTT(buff_topic, buff_msg);
-    sendArray[19] = false;
+  
+  for (byte i=1 ; i<5 ; i++) {
+    if (sendArray[i+15]) {                 // send actuator state
+      sprintf(buff_topic, "home/nb/node%02d/dev%02d", nodeId, i+15);
+      if (relayStruct[i].get()){ 
+        sprintf(buff_msg, "ON");
+      }else{
+        if (!relayStruct[i].get()){
+          sprintf(buff_msg, "OFF");
+        }
+      }
+      pubMQTT(buff_topic, buff_msg);
+      sendArray[i+15] = false;
+      
+      }
   }
 
   if (sendArray[40]) {                 // send button pressed message
     sprintf(buff_topic, "home/nb/node%02d/dev40", nodeId);
-    if (ACT1State == 0) sprintf(buff_msg, "OFF");
-    if (ACT1State == 1) sprintf(buff_msg, "ON");
+    if (ACT1State == relayStruct[0].off()) sprintf(buff_msg, "OFF");
+    if (ACT1State == relayStruct[0].on()) sprintf(buff_msg, "ON");
     pubMQTT(buff_topic, buff_msg);
     sendArray[40] = false;
   }
@@ -579,47 +586,51 @@ void checkChip() {
    Serial.printf("Chip ID = %08Xn", ESP.getChipId());
 }
 
-//  SETUP
+void openCloseAllRelay(int newState){
+    for (byte i=1 ; i<5 ; i++) {
+      relayStruct[i].set(newState);
+      sendArray[i+15] = true;
+  }
+}
 
 //===============================================================================================
-void setup() {
+//  SETUP
+void setup(void) {
 
                
   //pinMode(1,FUNCTION_3);
   //pinMode(3,FUNCTION_3);  
 
-  //---------
-  for (byte i=1 ; i<5 ; i++) {
-    pinMode(RelayArray[i],OUTPUT);
-    RELStateArray[i] = HIGH;
-    digitalWrite(RelayArray[i],RELStateArray[i]);
-      
-  }
-  delay(500);
   // Init Serial
 #ifdef DEBUG
     Serial.begin(SERIAL_BAUD);
     //checkChip();
 #endif
 
-  setAck=true;
+  // Push Buton
+  debouncer.attach(BTN,INPUT_PULLUP); // Attach the debouncer to a pin with INPUT_PULLUP mode 
+  debouncer.interval(50); // Use a debounce interval of 50 milliseconds
+  //---------
+  ACT1State=relayStruct[1].get();
 
+  setAck=true;
 
   sendArray[0] = false;//uptime
   sendArray[1] = true; // interval for push messages
+  sendArray[2] = true; // RSSI
   sendArray[3] = true;// Version
   sendArray[5] = true;// ACK
   sendArray[7] = false;//timerinterval (sec)
   sendArray[8] = false;//timer1 (min)
   sendArray[9] = false; //timer2 (minm)
   sendArray[10] = true;// send IP on startup
-  sendArray[11] = true; //SSID
-  sendArray[13] = true; // timer for moisture
+  sendArray[11] = false; //SSID
+  sendArray[13] = false; // timer for moisture
   sendArray[16] = true; //read/set actuator output
   sendArray[17] = true; //Relay
   sendArray[18] = true;
   sendArray[19] = true;
-  sendArray[40] = false;
+  sendArray[40] = true; //button
   sendArray[46] = false; 
   sendArray[48] - false; 
   sendArray[49] = false; 
@@ -630,15 +641,20 @@ void setup() {
   sendArray[54] = false; 
   sendArray[59] = true;
   sendArray[60] = true;
-  setupOTA();
+  
+  setupOTA(); //  OTA Configuration
+  
   IP = WiFi.localIP().toString();
+  sendMsg();                          // send any mqtt messages
 }
 
 //  LOOP
 
 //===============================================================================================
 void loop() {                       // Main program loop
+  
   ArduinoOTA.handle();
+  
   if (WiFi.status() != WL_CONNECTED) {            // Wifi connected ?
     connectWifi();
   }
@@ -648,41 +664,12 @@ void loop() {                       // Main program loop
   }
   client.loop();
 
-
-  // DETECT INPUT CHANGE
-// not necessary for current application
-  curState = digitalRead(BTN);                // Read button  
-  msgBlock = ((millis() - lastBtnPress) < HOLDOFF);     // hold-off time for additional button messages
-  if (!msgBlock &&  (curState != lastState)) {        // input changed ?
-    delay(5);
-    lastBtnPress = millis();                // take timestamp
+  debouncer.update(); // Update the Bounce instance
+  if ( debouncer.fell() ) {  // Call code if button transitions from HIGH to LOW
     if (setAck) sendArray[40] = true;                // send button message
-    if (curState == LOW) {
-      if (toggleOnButton) {                 // button in toggle state ?
-        ACT1State = !ACT1State;               // toggle output
-        digitalWrite(ACT1, ACT1State);
-        sendArray[16] = true;                    // send message on status change
-      } else if (TIMinterval > 0 && !timerOnButton) {       // button in timer state ?
-        timerOnButton = true;               // start timer interval
-        ACT1State = HIGH;                 // switch on ACT1
-        digitalWrite(ACT1, ACT1State);
-        sendArray[16] = true;
-      }
-    }
-    lastState = curState;
+    ACT1State = !ACT1State;
+    openCloseAllRelay(ACT1State);    
   }
-
-  // TIMER CHECK
-
-  if (TIMinterval > 0 && timerOnButton) {           // =0 means no timer
-    if ( millis() - lastBtnPress > TIMinterval * 1000) {  // timer expired ?
-      timerOnButton = false;                // then end timer interval
-      ACT1State = LOW;                  // and switch off Actuator
-      digitalWrite(ACT1, ACT1State);
-      sendArray[16] = true;
-    }
-  }
-
   //-------------------------------------------------------------
 
   // INCREASE UPTIME
@@ -711,12 +698,13 @@ void loop() {                       // Main program loop
       sendArray[8] = false;                  
       sendArray[9] = false;                 
       sendArray[10] = true;                // send IP address
-      sendArray[11] = false;
+      sendArray[11] = true;
       sendArray[13] = false; // 
       sendArray[16] = true;                    // output state relay
       sendArray[17] = true; //Relay2
       sendArray[18] = true; // Relay3
       sendArray[19] = true; // Relay4
+      sendArray[40] = true; //button
       sendArray[41] = false; //
       sendArray[42] = false; //
       sendArray[46] = false; //
